@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kbmod-angle-rate-tool"
+version = "0.1.0"
+description = "Interactive and CLI tooling for KBMOD rate/angle analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.5",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+interactive = ["streamlit>=1.36"]
+
+[project.scripts]
+kbmod-rate-angle-evaluator = "kbmod_angle_rate_tool.kbmod_rate_angle_evaluator:main"
+kbmod-rate-angle-evaluator-app = "kbmod_angle_rate_tool.kbmod_rate_angle_interactive:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

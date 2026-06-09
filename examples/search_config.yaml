@@ -1,0 +1,178 @@
+# ======================================================================
+# Core Configuration
+# ======================================================================
+
+# A dictionary mapping filter names to a color scale factor to use for those images.
+color_scale: null
+
+# Number of bytes to use for encoding pixel values on GPU. -1 means no encoding.
+encode_num_bytes: -1
+
+# Configuration dictionary for the trajectory generator.
+generator_config:
+  angle_units: degree
+  angles:
+  - 90
+  - -90
+  - 64
+  given_ecliptic: null
+  name: EclipticCenteredSearch
+  velocities:
+  - 25.0
+  - 225.0
+  - 64
+  velocity_units: pix / d
+
+# The maximum fraction of masked pixels allowed before an input image is dropped.
+max_masked_pixels: 0.5
+
+# The default standard deviation of the Gaussian PSF in pixels (if not provided in the data).
+psf_val: 1.4
+
+# The filename to which results will be saved.
+result_filename: /sdf/home/c/colinc/rubin-user/20X20_patch250060/full_results.ecsv
+
+# The x pixel bounds for the search starting location (None = use every pixel).
+x_pixel_bounds: null
+
+# If not None, the number of x pixels beyond the image bounds to use for starting coordinates.
+x_pixel_buffer: null
+
+# The y pixel bounds for the search starting location (None = use every pixel).
+y_pixel_bounds: null
+
+# If not None, the number of y pixels beyond the image bounds to use for starting coordinates.
+y_pixel_buffer: null
+
+# ======================================================================
+# Filtering Configuration
+# ======================================================================
+
+# If True remove all negative values prior to sigmaG computing the percentiles.
+clip_negative: false
+
+# If True, applies a CNN filter to the stamps.
+cnn_filter: false
+
+# The path to the CNN model file to use for filtering.
+cnn_model: null
+
+# The type of coadd to use for CNN filtering ('mean', 'median', or 'sum').
+cnn_coadd_type: mean
+
+# The radius (in pixels) of the stamp to use for CNN filtering if cnn_filter is True.
+cnn_stamp_radius: 49
+
+# The type of CNN model to use ('resnet18', 'resnet34', etc.) if cnn_filter is True.
+cnn_model_type: resnet18
+
+# If True, computes the psi and phi curves and saves them with the results.
+generate_psi_phi: true
+
+# If True, performs initial sigmaG filtering on GPU.
+gpu_filter: true
+
+# The log-likelihood level above which results are kept.
+lh_level: 5.0
+
+# The maximum number of results to save after all filtering.
+max_results: 100000
+
+# The threshold for considering two observations as near duplicates (in pixels).
+near_dup_thresh: 10
+
+# The minimum number of valid observations for the trajectory to be accepted.
+num_obs: 7
+
+# Maximum allowed offset (in pixels) between predicted and detected peak positions.
+peak_offset_max: null
+
+# If True, applies line clustering to the predicted lines.
+pred_line_cluster: false
+
+# Parameters for the line prediction model.
+pred_line_params:
+- 4.0
+- 2
+- 60
+
+# The maximum number of results to return from the GPU per pixel.
+results_per_pixel: 4
+
+# If True, apply sigmaG filtering.
+sigmaG_filter: true
+
+# The lower and upper limits for sigmaG filtering.
+sigmaG_lims:
+- 25
+- 75
+
+# If True, track the filtered objects in the results table.
+track_filtered: false
+
+# ======================================================================
+# Stamps Configuration
+# ======================================================================
+
+# The list of coadd images to compute ('mean', 'median', 'sum', 'weighted').
+coadds:
+- sum
+- mean
+- median
+- weighted
+
+# If True, generate an additional coadd for each calendar date.
+nightly_coadds: false
+
+# The radius (in pixels) of the stamp to extract.
+stamp_radius: 50
+
+# The type of stamp to extract.
+stamp_type: sum
+
+# ======================================================================
+# Clustering Configuration
+# ======================================================================
+
+# The epsilon parameter for clustering (in pixels).
+cluster_eps: 120.0
+
+# The type of clustering algorithm to use (if do_clustering = True).
+cluster_type: nn_start_end
+
+# The weight of differences in velocity relative to differences in distances during clustering.
+cluster_v_scale: 1.0
+
+# If true, perform clustering on the results.
+do_clustering: true
+
+# ======================================================================
+# Output Configuration
+# ======================================================================
+
+# If True, compute RA and Dec for each result.
+compute_ra_dec: true
+
+# List of result table columns to drop.
+drop_columns: []
+
+# If True, save all stamps to the results.
+save_all_stamps: false
+
+# If True, save the configuration used for processing.
+save_config: true
+
+# List of columns to save in separate files.
+separate_col_files:
+- all_stamps
+
+# ======================================================================
+# Other Configuration
+# ======================================================================
+
+# If True, only use the CPU for processing, even if a GPU is available.
+cpu_only: false
+
+# Run with debug logging enabled.
+debug: true
+
