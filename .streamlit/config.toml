@@ -1,0 +1,11 @@
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 20
+baseUrlPath = ""
+
+[client]
+showErrorDetails = true
+
+[browser]
+gatherUsageStats = false

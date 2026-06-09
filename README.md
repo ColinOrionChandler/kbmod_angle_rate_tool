@@ -46,6 +46,17 @@ rate/angle model:
   - the current plot as PNG/PDF
   - report text
 
+### Streamlit deployment
+
+For Streamlit Cloud or local script-based deployment, use this file as the app entry:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+`streamlit_app.py` is a direct entrypoint that calls the same interactive app, so it
+is safe to use in hosted deployments.
+
 ## Source config
 
 Use this file when you want to reuse the KBMOD search-grid defaults:
