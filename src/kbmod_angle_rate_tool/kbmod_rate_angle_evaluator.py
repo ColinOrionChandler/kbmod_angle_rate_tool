@@ -29,11 +29,19 @@ TYPICAL_TROJAN_RATE_ARCSEC_PER_HOUR = 13.0
 MAX_TRAVEL_ADJACENT_TARGET_FRACTION = 0.5
 TNO_ADJACENT_TARGET_FRACTION = 0.75
 TROJAN_ADJACENT_TARGET_FRACTION = 0.65
+ANGLE_REFERENCE_ECLIPTIC_OFFSET = "offset_from_ecliptic"
+ECLIPTIC_ANGLE_SOURCE_GIVEN = "generator_config.given_ecliptic"
+ECLIPTIC_ANGLE_SOURCE_RUNTIME_WCS = "runtime_work_unit_wcs"
+ECLIPTIC_ANGLE_SOURCE_EXPLICIT = "explicit_ecliptic_angle"
 
 
 @dataclass(frozen=True)
 class SearchGridConfig:
-    """Configured KBMOD search grid."""
+    """Configured KBMOD ``EclipticCenteredSearch`` grid.
+
+    ``angle_min_deg`` and ``angle_max_deg`` are offsets from the per-run
+    ecliptic angle.  They are not absolute image-frame angles.
+    """
 
     angle_min_deg: float
     angle_max_deg: float
@@ -41,6 +49,37 @@ class SearchGridConfig:
     velocity_min_pixels_per_day: float
     velocity_max_pixels_per_day: float
     velocity_samples: int
+    angle_reference: str = ANGLE_REFERENCE_ECLIPTIC_OFFSET
+    ecliptic_angle_deg: float | None = None
+    ecliptic_angle_source: str = ECLIPTIC_ANGLE_SOURCE_RUNTIME_WCS
+
+    @property
+    def angle_offset_min_deg(self) -> float:
+        """Minimum configured offset from the ecliptic angle."""
+
+        return self.angle_min_deg
+
+    @property
+    def angle_offset_max_deg(self) -> float:
+        """Maximum configured offset from the ecliptic angle."""
+
+        return self.angle_max_deg
+
+    @property
+    def angle_image_min_deg(self) -> float | None:
+        """Minimum absolute image angle, when the ecliptic angle is known."""
+
+        if self.ecliptic_angle_deg is None:
+            return None
+        return self.ecliptic_angle_deg + self.angle_min_deg
+
+    @property
+    def angle_image_max_deg(self) -> float | None:
+        """Maximum absolute image angle, when the ecliptic angle is known."""
+
+        if self.ecliptic_angle_deg is None:
+            return None
+        return self.ecliptic_angle_deg + self.angle_max_deg
 
     @property
     def angle_width_deg(self) -> float:
@@ -511,8 +550,20 @@ def apply_search_grid_overrides(
     return grid
 
 
-def load_search_grid_from_kbmod_yaml(path: Path) -> SearchGridConfig:
-    """Load a KBMOD EclipticCenteredSearch grid from a YAML config."""
+def load_search_grid_from_kbmod_yaml(
+    path: Path,
+    *,
+    ecliptic_angle_deg: float | None = None,
+) -> SearchGridConfig:
+    """Load a KBMOD ``EclipticCenteredSearch`` grid from a YAML config.
+
+    The configured ``angles`` bounds are retained as offsets from the run's
+    ecliptic angle.  If ``given_ecliptic`` is present, its value is recorded in
+    degrees so absolute image-angle bounds are also available.  Otherwise KBMOD
+    derives the ecliptic angle from each WorkUnit's WCS at runtime, so a YAML
+    file alone cannot determine the absolute bounds.  ``ecliptic_angle_deg`` may
+    be supplied when that runtime-derived value is known.
+    """
 
     with path.open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -536,12 +587,44 @@ def load_search_grid_from_kbmod_yaml(path: Path) -> SearchGridConfig:
         generator_config.get("velocities"),
     )
 
+    angle_units = generator_config.get("angle_units", "degree")
     angle_min, angle_max = _convert_angle_range_to_degrees(
         angles[0],
         angles[1],
-        generator_config.get("angle_units", "degree"),
+        angle_units,
         normalize=True,
     )
+    given_ecliptic = generator_config.get("given_ecliptic")
+    if given_ecliptic is not None:
+        resolved_ecliptic_angle_deg = _convert_angle_to_degrees(
+            given_ecliptic,
+            angle_units,
+        )
+        if ecliptic_angle_deg is not None:
+            explicit_ecliptic_angle_deg = _require_finite_float(
+                "ecliptic_angle_deg",
+                ecliptic_angle_deg,
+            )
+            if not math.isclose(
+                explicit_ecliptic_angle_deg,
+                resolved_ecliptic_angle_deg,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError(
+                    "ecliptic_angle_deg conflicts with "
+                    "generator_config.given_ecliptic"
+                )
+        ecliptic_angle_source = ECLIPTIC_ANGLE_SOURCE_GIVEN
+    elif ecliptic_angle_deg is not None:
+        resolved_ecliptic_angle_deg = _require_finite_float(
+            "ecliptic_angle_deg",
+            ecliptic_angle_deg,
+        )
+        ecliptic_angle_source = ECLIPTIC_ANGLE_SOURCE_EXPLICIT
+    else:
+        resolved_ecliptic_angle_deg = None
+        ecliptic_angle_source = ECLIPTIC_ANGLE_SOURCE_RUNTIME_WCS
     velocity_min, velocity_max = _convert_velocity_range_to_pixels_per_day(
         velocities[0],
         velocities[1],
@@ -555,6 +638,8 @@ def load_search_grid_from_kbmod_yaml(path: Path) -> SearchGridConfig:
         velocity_min_pixels_per_day=velocity_min,
         velocity_max_pixels_per_day=velocity_max,
         velocity_samples=_coerce_positive_int("generator_config.velocities[2]", velocities[2]),
+        ecliptic_angle_deg=resolved_ecliptic_angle_deg,
+        ecliptic_angle_source=ecliptic_angle_source,
     )
 
 
@@ -563,7 +648,19 @@ def resolve_search_grid_from_args(args: argparse.Namespace) -> SearchGridConfig:
 
     grid = DEFAULT_SEARCH_GRID
     if args.kbmod_config_yaml is not None:
-        grid = load_search_grid_from_kbmod_yaml(args.kbmod_config_yaml)
+        grid = load_search_grid_from_kbmod_yaml(
+            args.kbmod_config_yaml,
+            ecliptic_angle_deg=args.ecliptic_angle_deg,
+        )
+    elif args.ecliptic_angle_deg is not None:
+        grid = replace(
+            grid,
+            ecliptic_angle_deg=_require_finite_float(
+                "ecliptic_angle_deg",
+                args.ecliptic_angle_deg,
+            ),
+            ecliptic_angle_source=ECLIPTIC_ANGLE_SOURCE_EXPLICIT,
+        )
     return apply_search_grid_overrides(
         grid,
         pixel_scale_arcsec_per_pixel=args.pixel_scale,
@@ -624,12 +721,13 @@ def format_report(
         ),
         f"  configured velocity samples: {grid.velocity_samples}",
         (
-            "  configured angle range: "
+            "  configured angle-offset range (from ecliptic): "
             f"{_fmt(evaluation.angle_min_deg)} to "
             f"{_fmt(evaluation.angle_max_deg)} deg "
             f"(width {_fmt(evaluation.angle_width_deg)} deg)"
         ),
         f"  configured angle samples: {grid.angle_samples}",
+        *_format_ecliptic_angle_report_lines(grid),
         "",
         "Configured grid",
         f"  chosen angles: {grid.angle_samples}",
@@ -754,6 +852,40 @@ def format_report(
         )
 
     return "\n".join(lines)
+
+
+def _format_ecliptic_angle_report_lines(grid: SearchGridConfig) -> list[str]:
+    """Describe how configured angle offsets map to image-frame angles."""
+
+    lines = [
+        "  angle reference: offsets from KBMOD's per-field ecliptic direction",
+    ]
+    if grid.ecliptic_angle_deg is None:
+        lines.extend(
+            [
+                (
+                    "  ecliptic image angle: derived by KBMOD at runtime from "
+                    "the WorkUnit WCS; unavailable from this YAML/configuration"
+                ),
+                "  absolute image-angle range: unavailable without the runtime ecliptic angle",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                (
+                    "  ecliptic image angle: "
+                    f"{_fmt(grid.ecliptic_angle_deg)} deg "
+                    f"(source: {grid.ecliptic_angle_source})"
+                ),
+                (
+                    "  absolute image-angle range: "
+                    f"{_fmt(grid.angle_image_min_deg)} to "
+                    f"{_fmt(grid.angle_image_max_deg)} deg"
+                ),
+            ]
+        )
+    return lines
 
 
 def _format_reference_report_section(
@@ -1056,9 +1188,9 @@ def build_search_plot(
     ys.extend([bar_y_min, bar_y_max])
 
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x pixels")
-    ax.set_ylabel("y pixels")
-    ax.set_title("KBMOD configured angle fan")
+    ax.set_xlabel("x pixels (diagnostic frame; ecliptic direction = +x)")
+    ax.set_ylabel("y pixels (diagnostic frame)")
+    ax.set_title("KBMOD configured angle-offset fan (relative to ecliptic)")
     ax.set_xlim(min(xs) - pad, max(xs) + pad)
     ax.set_ylim(min(ys) - pad, max(ys) + pad)
     ax.grid(True, alpha=0.25)
@@ -1172,7 +1304,7 @@ def default_plot_output_path(evaluation: RateAngleEvaluation) -> Path:
         f"{_filename_number_token(evaluation.patch_width_arcmin)}X"
         f"{_filename_number_token(evaluation.patch_height_arcmin)}arcmin_"
         f"{_filename_number_token(grid.angle_min_deg)}_to_"
-        f"{_filename_number_token(grid.angle_max_deg)}_deg_"
+        f"{_filename_number_token(grid.angle_max_deg)}_eclipticOffsetDeg_"
         f"{grid.angle_samples}_angs_"
         f"{_filename_number_token(grid.velocity_min_pixels_per_day)}_to_"
         f"{_filename_number_token(grid.velocity_max_pixels_per_day)}_pixPerDay_"
@@ -1229,6 +1361,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional KBMOD YAML config with generator_config search-grid values.",
     )
     parser.add_argument(
+        "--ecliptic-angle-deg",
+        type=float,
+        default=None,
+        help=(
+            "Actual per-field ecliptic angle in image-frame degrees. "
+            "Use this to resolve absolute image-angle bounds when KBMOD derived "
+            "the angle from a WorkUnit WCS at runtime."
+        ),
+    )
+    parser.add_argument(
         "--plot-output",
         type=Path,
         default=DEFAULT_PLOT_OUTPUT,
@@ -1270,12 +1412,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Number of inclusive velocity samples in the configured grid.",
     )
     parser.add_argument(
+        "--angle-offset-range-deg",
         "--angle-range-deg",
+        dest="angle_range_deg",
         nargs=2,
         type=float,
         default=None,
         metavar=("MIN", "MAX"),
-        help="Explicit searched angle range in degrees.",
+        help="Explicit searched angle-offset range from the ecliptic, in degrees.",
     )
     parser.add_argument(
         "--angle-samples",
@@ -1359,6 +1503,18 @@ def _convert_angle_range_to_degrees(
     if normalize:
         return (min(values), max(values))
     return _validate_ordered_pair("angle_range_deg", values, strict=True)
+
+
+def _convert_angle_to_degrees(value: Any, units: Any) -> float:
+    """Convert one finite angular value to degrees."""
+
+    converted, _ = _convert_angle_range_to_degrees(
+        value,
+        value,
+        units,
+        normalize=True,
+    )
+    return _require_finite_float("angle", converted)
 
 
 def _convert_velocity_range_to_pixels_per_day(
@@ -1583,14 +1739,29 @@ def _plot_adjacent_endpoint_callout(
 
 def _format_plot_parameter_box(evaluation: RateAngleEvaluation) -> str:
     grid = evaluation.search_grid
-    return "\n".join(
+    lines = [
+        "Chosen Parameters",
+        f"days: {evaluation.timespan_days:.2f}",
+        (
+            "angle offsets from ecliptic: "
+            f"{grid.angle_min_deg:.2f} to {grid.angle_max_deg:.2f} deg"
+        ),
+    ]
+    if grid.ecliptic_angle_deg is None:
+        lines.append("absolute image angles: unavailable (runtime WCS needed)")
+    else:
+        lines.extend(
+            [
+                f"ecliptic image angle: {grid.ecliptic_angle_deg:.2f} deg",
+                (
+                    "absolute image angles: "
+                    f"{grid.angle_image_min_deg:.2f} to "
+                    f"{grid.angle_image_max_deg:.2f} deg"
+                ),
+            ]
+        )
+    lines.extend(
         [
-            "Chosen Parameters",
-            f"days: {evaluation.timespan_days:.2f}",
-            (
-                "angle range: "
-                f"{grid.angle_min_deg:.2f} to {grid.angle_max_deg:.2f} deg"
-            ),
             f"angles: {grid.angle_samples}",
             (
                 "rate range: "
@@ -1601,6 +1772,7 @@ def _format_plot_parameter_box(evaluation: RateAngleEvaluation) -> str:
             f"seeing: {evaluation.seeing_arcsec:.2f} arcsec",
         ]
     )
+    return "\n".join(lines)
 
 
 def _sample_spacing(start: float, stop: float, count: int) -> float:
@@ -1653,6 +1825,16 @@ def _coerce_positive_int(name: str, value: Any) -> int:
 def _require_positive(name: str, value: float) -> None:
     if value <= 0.0:
         raise ValueError(f"{name} must be positive")
+
+
+def _require_finite_float(name: str, value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be a finite number")
+    return parsed
 
 
 def _validate_ordered_pair(

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kbmod-angle-rate-tool"
-version = "0.1.0"
-description = "Interactive and CLI tooling for KBMOD rate/angle analysis."
+version = "0.2.0"
+description = "Plan KBMOD searches: recommend reflex-node configurations and evaluate rate/angle grids."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,7 @@ interactive = ["streamlit>=1.36"]
 [project.scripts]
 kbmod-rate-angle-evaluator = "kbmod_angle_rate_tool.kbmod_rate_angle_evaluator:main"
 kbmod-rate-angle-evaluator-app = "kbmod_angle_rate_tool.kbmod_rate_angle_interactive:main"
+kbmod-reflex-recommend = "kbmod_angle_rate_tool.reflex_search_space:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

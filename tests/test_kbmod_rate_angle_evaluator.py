@@ -115,6 +115,7 @@ def test_parse_args_resolves_defaults():
     assert tuple(args.patch_size_arcmin) == evaluator.DEFAULT_PATCH_SIZE_ARCMIN
     assert args.plot_output is evaluator.DEFAULT_PLOT_OUTPUT is None
     assert args.no_report_file is False
+    assert args.ecliptic_angle_deg is None
     assert args.search_grid == evaluator.DEFAULT_SEARCH_GRID
 
 
@@ -122,7 +123,8 @@ def test_default_plot_output_path_describes_integer_grid():
     result = evaluator.evaluate_rate_angle_sampling(10.0)
 
     assert evaluator.default_plot_output_path(result) == Path(
-        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_deg_64_angs_25_to_225_pixPerDay_64rateIntervals.png"
+        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_"
+        "eclipticOffsetDeg_64_angs_25_to_225_pixPerDay_64rateIntervals.png"
     )
 
 
@@ -152,6 +154,7 @@ def test_default_plot_output_path_describes_integer_grid():
         ["10", "--angle-samples", "0"],
         ["10", "--angle-range-deg", "90", "-90"],
         ["10", "--angle-range-deg", "90", "90"],
+        ["10", "--ecliptic-angle-deg", "nan"],
     ],
 )
 def test_parse_args_rejects_invalid_values(argv):
@@ -184,6 +187,13 @@ psf_val: 999
 
     assert grid.angle_min_deg == -90.0
     assert grid.angle_max_deg == 90.0
+    assert grid.angle_offset_min_deg == -90.0
+    assert grid.angle_offset_max_deg == 90.0
+    assert grid.angle_reference == evaluator.ANGLE_REFERENCE_ECLIPTIC_OFFSET
+    assert grid.ecliptic_angle_deg is None
+    assert grid.ecliptic_angle_source == evaluator.ECLIPTIC_ANGLE_SOURCE_RUNTIME_WCS
+    assert grid.angle_image_min_deg is None
+    assert grid.angle_image_max_deg is None
     assert grid.angle_samples == 64
     assert grid.velocity_min_pixels_per_day == 25.0
     assert grid.velocity_max_pixels_per_day == 225.0
@@ -196,6 +206,93 @@ def test_repo_example_yaml_loads():
     grid = evaluator.load_search_grid_from_kbmod_yaml(yaml_path)
 
     assert grid == evaluator.DEFAULT_SEARCH_GRID
+
+
+@pytest.mark.parametrize(
+    ("angle_units", "given_ecliptic", "expected_deg"),
+    [
+        ("degree", 17.5, 17.5),
+        ("radian", 0.25, pytest.approx(14.3239448783)),
+    ],
+)
+def test_yaml_given_ecliptic_resolves_absolute_image_angle_bounds(
+    tmp_path: Path,
+    angle_units: str,
+    given_ecliptic: float,
+    expected_deg: float,
+):
+    yaml_path = tmp_path / "search_config.yaml"
+    yaml_path.write_text(
+        f"""
+generator_config:
+  name: EclipticCenteredSearch
+  angle_units: {angle_units}
+  angles: [-0.1, 0.2, 4]
+  given_ecliptic: {given_ecliptic}
+  velocities: [10.0, 20.0, 3]
+  velocity_units: pix / d
+""",
+        encoding="utf-8",
+    )
+
+    grid = evaluator.load_search_grid_from_kbmod_yaml(yaml_path)
+
+    assert grid.ecliptic_angle_deg == expected_deg
+    assert grid.ecliptic_angle_source == evaluator.ECLIPTIC_ANGLE_SOURCE_GIVEN
+    assert grid.angle_image_min_deg == pytest.approx(
+        grid.ecliptic_angle_deg + grid.angle_offset_min_deg
+    )
+    assert grid.angle_image_max_deg == pytest.approx(
+        grid.ecliptic_angle_deg + grid.angle_offset_max_deg
+    )
+
+
+def test_explicit_ecliptic_angle_overrides_runtime_derived_yaml_reference(tmp_path: Path):
+    yaml_path = tmp_path / "search_config.yaml"
+    yaml_path.write_text(
+        """
+generator_config:
+  name: EclipticCenteredSearch
+  angle_units: degree
+  angles: [-30, 30, 11]
+  given_ecliptic: null
+  velocities: [10.0, 20.0, 3]
+  velocity_units: pix / d
+""",
+        encoding="utf-8",
+    )
+
+    grid = evaluator.load_search_grid_from_kbmod_yaml(
+        yaml_path,
+        ecliptic_angle_deg=12.0,
+    )
+
+    assert grid.ecliptic_angle_deg == 12.0
+    assert grid.ecliptic_angle_source == evaluator.ECLIPTIC_ANGLE_SOURCE_EXPLICIT
+    assert grid.angle_image_min_deg == -18.0
+    assert grid.angle_image_max_deg == 42.0
+
+
+def test_explicit_ecliptic_angle_cannot_conflict_with_yaml_given_ecliptic(tmp_path: Path):
+    yaml_path = tmp_path / "search_config.yaml"
+    yaml_path.write_text(
+        """
+generator_config:
+  name: EclipticCenteredSearch
+  angle_units: degree
+  angles: [-30, 30, 11]
+  given_ecliptic: 7
+  velocities: [10.0, 20.0, 3]
+  velocity_units: pix / d
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="conflicts with generator_config.given_ecliptic"):
+        evaluator.load_search_grid_from_kbmod_yaml(
+            yaml_path,
+            ecliptic_angle_deg=12.0,
+        )
 
 
 def test_yaml_overrides_builtins_and_cli_overrides_yaml(tmp_path: Path):
@@ -244,6 +341,19 @@ generator_config:
     assert cli_args.search_grid.velocity_max_pixels_per_day == 2.0
     assert cli_args.search_grid.velocity_samples == 5
 
+    reference_args = evaluator.parse_args(
+        [
+            "10",
+            "--kbmod-config-yaml",
+            str(yaml_path),
+            "--ecliptic-angle-deg",
+            "12.5",
+        ]
+    )
+    assert reference_args.search_grid.ecliptic_angle_deg == 12.5
+    assert reference_args.search_grid.angle_image_min_deg == -17.5
+    assert reference_args.search_grid.angle_image_max_deg == 42.5
+
 
 def test_run_prints_report_without_plot(capsys, tmp_path: Path):
     output = tmp_path / "plot.png"
@@ -254,6 +364,9 @@ def test_run_prints_report_without_plot(capsys, tmp_path: Path):
     assert result.primary.angle_count == 708
     assert "chosen angles: 64" in captured.out
     assert "inclusive angles: 708" in captured.out
+    assert "configured angle-offset range (from ecliptic): -90 to 90 deg" in captured.out
+    assert "angle reference: offsets from KBMOD's per-field ecliptic direction" in captured.out
+    assert "absolute image-angle range: unavailable" in captured.out
     assert "Typical TNO SSB reference" in captured.out
     assert "  rate: 0.6 arcsec/hour (72 px/day)" in captured.out
     assert "adjacent chosen-angle endpoint separation at reference travel: 35.9 px (7.18 arcsec)" in captured.out
@@ -315,6 +428,12 @@ def test_build_search_plot_reference_toggles_control_legend_labels():
 
     default_fig = evaluator.build_search_plot(result)
     try:
+        assert "relative to ecliptic" in default_fig.axes[0].get_title()
+        assert "ecliptic direction = +x" in default_fig.axes[0].get_xlabel()
+        assert any(
+            "angle offsets from ecliptic" in text.get_text()
+            for text in default_fig.axes[0].texts
+        )
         _, default_labels = default_fig.axes[0].get_legend_handles_labels()
         assert any("TNO SSB" in label for label in default_labels)
         assert any("Trojan" in label for label in default_labels)
@@ -351,6 +470,26 @@ def test_format_report_reference_toggles_do_not_change_core_counts():
     assert "Configured maximum travel adjacent endpoints" in text
 
 
+def test_format_report_includes_known_absolute_image_angle_range():
+    grid = evaluator.SearchGridConfig(
+        angle_min_deg=-30.0,
+        angle_max_deg=30.0,
+        angle_samples=7,
+        velocity_min_pixels_per_day=25.0,
+        velocity_max_pixels_per_day=225.0,
+        velocity_samples=64,
+        ecliptic_angle_deg=12.0,
+        ecliptic_angle_source=evaluator.ECLIPTIC_ANGLE_SOURCE_GIVEN,
+    )
+    result = evaluator.evaluate_rate_angle_sampling(1.0, search_grid=grid)
+
+    text = evaluator.format_report(result)
+
+    assert "configured angle-offset range (from ecliptic): -30 to 30 deg" in text
+    assert "ecliptic image angle: 12 deg (source: generator_config.given_ecliptic)" in text
+    assert "absolute image-angle range: -18 to 42 deg" in text
+
+
 def test_build_export_zip_contains_plot_pdf_and_report_text():
     result = evaluator.evaluate_rate_angle_sampling(10.0)
 
@@ -381,16 +520,16 @@ def test_run_writes_config_descriptive_default_plot_and_report(tmp_path: Path, m
     result = evaluator.run(["10"])
 
     output = tmp_path / (
-        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_deg_64_angs_"
-        "25_to_225_pixPerDay_64rateIntervals.png"
+        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_"
+        "eclipticOffsetDeg_64_angs_25_to_225_pixPerDay_64rateIntervals.png"
     )
     pdf_output = tmp_path / (
-        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_deg_64_angs_"
-        "25_to_225_pixPerDay_64rateIntervals.pdf"
+        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_"
+        "eclipticOffsetDeg_64_angs_25_to_225_pixPerDay_64rateIntervals.pdf"
     )
     report = tmp_path / (
-        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_deg_64_angs_"
-        "25_to_225_pixPerDay_64rateIntervals_report.txt"
+        "kbmod_rate_angle_evaluator_10_days_20X20arcmin_-90_to_90_"
+        "eclipticOffsetDeg_64_angs_25_to_225_pixPerDay_64rateIntervals_report.txt"
     )
     assert result.search_grid.angle_samples == 64
     assert output.exists()
